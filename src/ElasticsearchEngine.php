@@ -16,17 +16,33 @@ class ElasticsearchEngine extends Engine
      * @var string
      */
     protected $index;
-
+    /**
+     * If the index should be set per model.
+     *
+     * @var bool
+     */
+    protected $perModelIndex;
     /**
      * Create a new engine instance.
      *
      * @param  \Elasticsearch\Client  $elastic
      * @return void
      */
-    public function __construct(Elastic $elastic, $index)
+    public function __construct(Elastic $elastic, $index, $perModelIndex = true)
     {
         $this->elastic = $elastic;
         $this->index = $index;
+        $this->perModelIndex = $perModelIndex;
+    }
+    /**
+     * Retrieves the index for the given model.
+     *
+     * @param  \Illuminate\Database\Eloquent\Model  $model
+     * @return string
+     */
+    protected function getIndex($model)
+    {
+        return ($this->perModelIndex ? $model->searchableAs() : $this->index);
     }
 
     /**
@@ -44,7 +60,7 @@ class ElasticsearchEngine extends Engine
             $params['body'][] = [
                 'update' => [
                     '_id' => $model->getKey(),
-                    '_index' => $this->index,
+                    '_index' => $this->getIndex($model),
                     '_type' => $model->searchableAs(),
                 ]
             ];
@@ -72,7 +88,7 @@ class ElasticsearchEngine extends Engine
             $params['body'][] = [
                 'delete' => [
                     '_id' => $model->getKey(),
-                    '_index' => $this->index,
+                    '_index' => $this->getIndex($model),
                     '_type' => $model->searchableAs(),
                 ]
             ];
@@ -91,6 +107,7 @@ class ElasticsearchEngine extends Engine
     {
         return $this->performSearch($builder, array_filter([
             'numericFilters' => $this->filters($builder),
+            'sorting' => $this->sorting($builder),
             'size' => $builder->limit,
         ]));
     }
@@ -107,6 +124,7 @@ class ElasticsearchEngine extends Engine
     {
         $result = $this->performSearch($builder, [
             'numericFilters' => $this->filters($builder),
+            'sorting' => $this->sorting($builder),
             'from' => (($page * $perPage) - $perPage),
             'size' => $perPage,
         ]);
@@ -126,20 +144,22 @@ class ElasticsearchEngine extends Engine
     protected function performSearch(Builder $builder, array $options = [])
     {
         $params = [
-            'index' => $this->index,
-            'type' => $builder->index ?: $builder->model->searchableAs(),
+            'index' => $this->getIndex($builder->model),
+            'type' => $builder->model->searchableAs(),
             'body' => [
                 'query' => [
                     'bool' => [
-                        'must' => [['query_string' => [ 'query' => "*{$builder->query}*"]]]
+                        'must' => [['query_string' => [
+                            'query' => "*{$builder->query}*",
+                        ]]]
                     ]
-                ]
+                ],
+                'sort' => [
+                    '_score'
+                ],
+                'track_scores' => true,
             ]
         ];
-
-        if ($sort = $this->sort($builder)) {
-            $params['body']['sort'] = $sort;
-        }
 
         if (isset($options['from'])) {
             $params['body']['from'] = $options['from'];
@@ -152,6 +172,27 @@ class ElasticsearchEngine extends Engine
         if (isset($options['numericFilters']) && count($options['numericFilters'])) {
             $params['body']['query']['bool']['must'] = array_merge($params['body']['query']['bool']['must'],
                 $options['numericFilters']);
+        }
+
+        // Sorting
+        if(isset($options['sorting']) && count($options['sorting'])) {
+            $params['body']['sort'] = array_merge($params['body']['sort'],
+                $options['sorting']);
+        }
+
+        // Boost
+        if($boosts = $builder->model['boosts'])
+        {
+            $fields = collect($boosts)->map(function($value, $key){
+                return "{$key}^{$value}";
+            });
+
+            $multimatch = [
+                'query' => "*{$builder->query}*",
+                'fields' => $fields->values()->all()
+            ];
+
+            $params['body']['query']['bool']['should']['multi_match'] = $multimatch;
         }
 
         return $this->elastic->search($params);
@@ -167,6 +208,17 @@ class ElasticsearchEngine extends Engine
     {
         return collect($builder->wheres)->map(function ($value, $key) {
             return ['match_phrase' => [$key => $value]];
+        })->values()->all();
+    }
+
+    /**
+     * @param Builder $builder
+     * @return array
+     */
+    protected function sorting(Builder $builder)
+    {
+        return collect($builder->orders)->map(function ($value, $key) {
+            return [array_get($value, 'column') => ['order' => array_get($value, 'direction')]];
         })->values()->all();
     }
 
@@ -218,16 +270,50 @@ class ElasticsearchEngine extends Engine
     }
 
     /**
-     * Generates the sort if theres any.
-     *
-     * @param  Builder $builder
-     * @return array|null
+     * @param $index
+     * @return bool
      */
-    protected function sort($builder)
+    public function exists($index)
     {
-        if (count($builder->orders) == 0) {
-            return null;
-        }
+        return $this->elastic->indices()->exists(['index' => $index]);
+    }
+
+
+    /**
+     * @param $index
+     * @return array
+     */
+    public function createIndex($index)
+    {
+        return $this->elastic->indices()->create(['index' => $index]);
+    }
+
+    /**
+     * @param null $index
+     * @return array
+     */
+    public function deleteIndex($index)
+    {
+        return $this->elastic->indices()->delete(['index' => $index]);
+    }
+
+    /**
+     * @param null $index
+     * @param $type
+     * @param array $mapping
+     * @return array
+     */
+    public function putMapping($index = null, $type, array $mapping)
+    {
+        $params = [
+            'index' => $index,
+            'type' => $type,
+            'body' => [
+                $type => [
+                    'properties' => $mapping
+                ]
+            ]
+        ];
 
         return collect($builder->orders)->map(function($order) {
             return [$order['column'] => $order['direction']];
