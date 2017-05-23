@@ -4,6 +4,7 @@ namespace ScoutEngines\Elasticsearch;
 
 use Laravel\Scout\Builder;
 use Laravel\Scout\Engines\Engine;
+use Illuminate\Support\Facades\Log;
 use Elasticsearch\Client as Elastic;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Collection as BaseCollection;
@@ -109,6 +110,7 @@ class ElasticsearchEngine extends Engine
             'numericFilters' => $this->filters($builder),
             'sorting' => $this->sorting($builder),
             'size' => $builder->limit,
+            'min_score' => 50
         ]));
     }
 
@@ -127,6 +129,7 @@ class ElasticsearchEngine extends Engine
             'sorting' => $this->sorting($builder),
             'from' => (($page * $perPage) - $perPage),
             'size' => $perPage,
+            'min_score' => 50
         ]);
 
        $result['nbPages'] = $result['hits']['total']/$perPage;
@@ -169,6 +172,10 @@ class ElasticsearchEngine extends Engine
             $params['body']['size'] = $options['size'];
         }
 
+        if (isset($options['min_score'])) {
+            $params['body']['min_score'] = $options['min_score'];
+        }
+
         if (isset($options['numericFilters']) && count($options['numericFilters'])) {
             $params['body']['query']['bool']['must'] = array_merge($params['body']['query']['bool']['must'],
                 $options['numericFilters']);
@@ -194,6 +201,7 @@ class ElasticsearchEngine extends Engine
 
             $params['body']['query']['bool']['should']['multi_match'] = $multimatch;
         }
+        Log::debug('elasticsearch', $params);
 
         return $this->elastic->search($params);
     }
