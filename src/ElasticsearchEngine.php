@@ -153,7 +153,7 @@ class ElasticsearchEngine extends Engine
                 'query' => [
                     'bool' => [
                         'must' => [['query_string' => [
-                            'query' => "*{$builder->query}*",
+                            'query' => "{$builder->query}",
                         ]]]
                     ]
                 ],
@@ -195,7 +195,7 @@ class ElasticsearchEngine extends Engine
             });
 
             $multimatch = [
-                'query' => "*{$builder->query}*",
+                'query' => "{$builder->query}",
                 'fields' => $fields->values()->all()
             ];
 
