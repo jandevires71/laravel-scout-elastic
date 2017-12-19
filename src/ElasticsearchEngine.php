@@ -183,8 +183,7 @@ class ElasticsearchEngine extends Engine
 
         // Sorting
         if(isset($options['sorting']) && count($options['sorting'])) {
-            $params['body']['sort'] = array_merge($params['body']['sort'],
-                $options['sorting']);
+            $params['body']['sort'] = array_merge($options['sorting'],$params['body']['sort']);
         }
 
         // Boost
